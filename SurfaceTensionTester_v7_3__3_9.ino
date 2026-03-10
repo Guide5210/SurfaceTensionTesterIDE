@@ -241,8 +241,9 @@ void updatePeak(float f, long p) {
 // ═══════════════════════════════════════════════════════
 // EEPROM / CALIBRATION / LOAD CELL CONFIG
 // ═══════════════════════════════════════════════════════
-const int EEPROM_CAL_ADDR = 0;
-const int EEPROM_LC_ADDR = 8;  // Load cell type stored in EEPROM
+const int EEPROM_CAL_100G_ADDR = 0;   // Cal factor for 100g cell (4 bytes)
+const int EEPROM_CAL_30G_ADDR  = 4;   // Cal factor for 30g cell (4 bytes)
+const int EEPROM_LC_ADDR = 8;         // Load cell type stored in EEPROM
 
 const float DEFAULT_CAL_100G = 16800.0;
 const float DEFAULT_CAL_30G  = 50000.0;  // Approximate, calibrate for exact
@@ -253,10 +254,14 @@ float calFactor = DEFAULT_CAL_100G;
 uint8_t loadCellType = 0;
 float loadCellCapacity = 100.0;  // grams
 
-void saveCal() { byte*p=(byte*)&calFactor; for(int i=0;i<4;i++)EEPROM.write(EEPROM_CAL_ADDR+i,p[i]); }
+void saveCal() {
+  int addr = (loadCellType == 1) ? EEPROM_CAL_30G_ADDR : EEPROM_CAL_100G_ADDR;
+  byte*p=(byte*)&calFactor; for(int i=0;i<4;i++)EEPROM.write(addr+i,p[i]);
+}
 void loadCal() {
+  int addr = (loadCellType == 1) ? EEPROM_CAL_30G_ADDR : EEPROM_CAL_100G_ADDR;
   byte*p=(byte*)&calFactor;
-  for(int i=0;i<4;i++) p[i]=EEPROM.read(EEPROM_CAL_ADDR+i);
+  for(int i=0;i<4;i++) p[i]=EEPROM.read(addr+i);
   if(calFactor<1000||calFactor>200000) calFactor = (loadCellType==1) ? DEFAULT_CAL_30G : DEFAULT_CAL_100G;
 }
 
@@ -1589,7 +1594,7 @@ void handleDown() {
   long pd=abs(cp-lastSampledPos);
 
   if (pd>=POS_INTERVAL) {
-    float f = -getSignedForce();  // Negate: convention UP = negative
+    float f = getSignedForce();  // Natural sign: UP = negative force
     lastForce=f; lastSampledPos=cp;
     if (streaming) streamData(f, cp);
 
@@ -1944,15 +1949,24 @@ void printSystemInfo() {
 //  LOAD CELL SWITCH (L command) — toggle 100g ↔ 30g
 // ═══════════════════════════════════════════════════════
 void toggleLoadCell() {
+  // Save current cal factor before switching
+  saveCal();
+
   loadCellType = (loadCellType == 0) ? 1 : 0;
   loadCellCapacity = (loadCellType == 1) ? 30.0 : 100.0;
   OVERLOAD_LIM = (loadCellType == 1) ? 0.25 : 5.0;
   saveLoadCellType();
 
+  // Load cal factor for the new load cell type
+  loadCal();
+  LoadCell.setCalFactor(calFactor);
+  resetFilters();
+
   Serial.print(F("LOADCELL_CHANGED:"));
   Serial.println(loadCellType == 1 ? F("30G") : F("100G"));
   Serial.print(F("  Capacity: ")); Serial.print(loadCellCapacity, 0); Serial.println(F("g"));
   Serial.print(F("  Overload: ")); Serial.print(OVERLOAD_LIM, 2); Serial.println(F("N"));
+  Serial.print(F("  Cal: ")); Serial.println(calFactor, 1);
   Serial.println(F("  *** Recalibrate recommended (K) ***"));
 
   tft.fillRect(0, TOAST_Y, SW, 11, C_BG_DARK);
@@ -2004,9 +2018,51 @@ void handleCalMode() {
 
   char msg[40]; snprintf(msg,sizeof(msg),"Place %.1fg\non load cell",mass);
   drawCalScreen("Step 3/3",msg);
-  Serial.println(F("Step 3: Place mass")); delay(2000);
+  Serial.println(F("Step 3: Place mass"));
+
+  // Settle: keep reading ADC until stable (critical for accurate calibration)
+  unsigned long settleStart = millis();
+  const unsigned long SETTLE_MIN = 3000;   // Minimum settling time (ms)
+  const unsigned long SETTLE_MAX = 10000;  // Maximum settling time (ms)
+  const float SETTLE_SD = 0.5;             // SD threshold (raw units) for stability
+  const int SETTLE_WIN = 20;               // Window size for stability check
+  float settleReadings[20];
+  int settleIdx = 0;
+  bool settled = false;
+
+  while (millis() - settleStart < SETTLE_MAX) {
+    LoadCell.update();
+    delay(50);
+
+    if (millis() - settleStart >= SETTLE_MIN && !settled) {
+      // Collect stability window
+      float sum = 0;
+      for (int i = 0; i < SETTLE_WIN; i++) {
+        while (!LoadCell.update()) delay(5);
+        settleReadings[i] = LoadCell.getData();
+        sum += settleReadings[i];
+      }
+      float mean = sum / SETTLE_WIN;
+      float var = 0;
+      for (int i = 0; i < SETTLE_WIN; i++) {
+        float d = settleReadings[i] - mean;
+        var += d * d;
+      }
+      float sd = sqrt(var / SETTLE_WIN);
+      if (sd < SETTLE_SD) {
+        settled = true;
+        break;
+      }
+    }
+  }
+  if (!settled) {
+    drawCalScreen("Step 3/3", "Settling...\n(using best)");
+    Serial.println(F("CAL_WARN:Settle timeout, using current"));
+  }
+
   float nc=LoadCell.getNewCalibration(mass);
   calFactor=nc; LoadCell.setCalFactor(nc); saveCal();
+  resetFilters();  // Flush filter buffer so readings use new cal factor immediately
 
   tft.fillScreen(C_BG); tftHeader("CAL DONE");
   tft.setTextSize(1); tft.setTextColor(C_OK);

@@ -477,7 +477,7 @@ void drawBoot() {
 
   // System checks with animation
   const char* checks[] = {
-    "Serial 115200",
+    "Serial 250000",
     "HX711 LoadCell",
     "Stepper Driver",
     "TFT Display",
@@ -517,7 +517,7 @@ void drawBoot() {
 
   // COM status
   tft.setTextColor(C_TXT_DIM);
-  tft.setCursor(4, 114); tft.print(F("COM 115200 "));
+  tft.setCursor(4, 114); tft.print(F("COM 250000 "));
   tft.setTextColor(C_OK); tft.print(F("Connected"));
 
   delay(800);
@@ -585,7 +585,7 @@ void drawIdle() {
   tft.print(loadCellType == 1 ? F("30g") : F("100g"));
   tft.setTextColor(C_TXT_DIM); tft.print(F(" COM"));
   tft.setTextColor(C_OK); tft.print(F(" OK"));
-  tft.setTextColor(C_TXT_DIM); tft.print(F(" 115200"));
+  tft.setTextColor(C_TXT_DIM); tft.print(F(" 250000"));
 
   // Bottom accent
   tft.drawFastHLine(0, SH - 1, SW, C_BLUE_DIM);
@@ -1109,7 +1109,7 @@ void handleEncoderMode() {
 //  SETUP
 // ═══════════════════════════════════════════════════════
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(250000);
   delay(500);
 
   tft.initR(INITR_GREENTAB);
@@ -1206,7 +1206,7 @@ void handleMonitor() {
   if (now - lastTFTTime >= TFT_INT) {
     float f = getClampedForce();
     updForce(f);
-    Serial.print(F("\rForce: ")); Serial.print(f,5); Serial.print(F(" N  "));
+    Serial.print(F("Force:")); Serial.print(f,5); Serial.println(F(" N"));
     lastTFTTime = now; fullRedraw = false;
   }
 }
@@ -1257,7 +1257,8 @@ void enterTest(int idx) {
 
   curMode=MODE_TEST; motorSt=MOT_DOWN;
   Serial.println();
-  Serial.print(F("TEST: ")); Serial.println(t.name);
+  Serial.print(F("RUN_START:")); Serial.print(t.name);
+  Serial.println(F(":1/1:1"));
   Serial.print(F("Speed: ")); Serial.print(t.speed_mms*1000,3); Serial.println(F(" um/s"));
 
   contactDet=false; lastSampledPos=homePos;
@@ -1666,6 +1667,10 @@ void handleUp() {
     motorSt=MOT_IDLE;
 
     if (curMode==MODE_TEST) {
+      float pk = (confirmedPeak > 0) ? confirmedPeak : dc.peak;
+      Serial.print(F("RUN_END:")); Serial.print(tests[curTest].name);
+      Serial.print(F(":1:")); Serial.print(pk, 6);
+      Serial.println(F(":1"));
       updStatus("DONE", C_OK); delay(800); exitTest();
     }
     else if (curMode==MODE_AUTO) {
@@ -1986,16 +1991,16 @@ void handleCalMode() {
     LoadCell.update();
     if(Serial.available()>0){char c=Serial.read();while(Serial.available())Serial.read();if(c=='T'||c=='t'){LoadCell.tareNoDelay();tok=true;}}
   }
-  if(!tok){exitCal();return;}
+  if(!tok){Serial.println(F("CAL_ERR:Tare timeout"));exitCal();return;}
   drawCalScreen("Step 1/3","Taring...");
   unsigned long ts=millis();
   while(!LoadCell.getTareStatus()&&millis()-ts<5000){LoadCell.update();delay(10);}
-  if(!LoadCell.getTareStatus()){exitCal();return;}
+  if(!LoadCell.getTareStatus()){Serial.println(F("CAL_ERR:Tare failed"));exitCal();return;}
   Serial.println(F("TARE_OK"));
 
   drawCalScreen("Step 2/3","Enter mass (g)\nvia Serial");
   Serial.println(F("Step 2: Enter mass (g)"));
-  float mass=getMass(60000); if(mass<0){exitCal();return;}
+  float mass=getMass(60000); if(mass<0){Serial.println(F("CAL_ERR:Mass input timeout"));exitCal();return;}
 
   char msg[40]; snprintf(msg,sizeof(msg),"Place %.1fg\non load cell",mass);
   drawCalScreen("Step 3/3",msg);
@@ -2009,6 +2014,7 @@ void handleCalMode() {
   tft.setTextColor(C_BLUE_HI); tft.setCursor(4,44);
   tft.print(F("Factor: ")); tft.print(nc,1);
   Serial.print(F("New Cal: ")); Serial.println(nc);
+  Serial.println(F("CAL_DONE"));
   delay(2000); exitCal();
 }
 void exitCal() { curMode=MODE_IDLE;motorSt=MOT_IDLE;resetFilters();drawIdle();Serial.println(F("READY")); }

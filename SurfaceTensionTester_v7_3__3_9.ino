@@ -262,7 +262,7 @@ void loadCal() {
   int addr = (loadCellType == 1) ? EEPROM_CAL_30G_ADDR : EEPROM_CAL_100G_ADDR;
   byte*p=(byte*)&calFactor;
   for(int i=0;i<4;i++) p[i]=EEPROM.read(addr+i);
-  if(isnan(calFactor)||calFactor<1000||calFactor>200000) calFactor = (loadCellType==1) ? DEFAULT_CAL_30G : DEFAULT_CAL_100G;
+  if(isnan(calFactor)||abs(calFactor)<1000||abs(calFactor)>200000) calFactor = (loadCellType==1) ? DEFAULT_CAL_30G : DEFAULT_CAL_100G;
 }
 
 void saveLoadCellType() { EEPROM.write(EEPROM_LC_ADDR, loadCellType); }

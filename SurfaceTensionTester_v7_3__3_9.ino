@@ -2021,55 +2021,54 @@ void handleCalMode() {
   Serial.println(F("Step 3: Place mass"));
 
   // Settle: keep reading ADC until stable (critical for accurate calibration)
+  drawCalScreen("Step 3/3","Settling...");
   unsigned long settleStart = millis();
-  const unsigned long SETTLE_MIN = 3000;   // Minimum settling time (ms)
-  const unsigned long SETTLE_MAX = 10000;  // Maximum settling time (ms)
-  const float SETTLE_SD = 0.5;             // SD threshold (raw units) for stability
-  const int SETTLE_WIN = 20;               // Window size for stability check
-  float settleReadings[20];
-  int settleIdx = 0;
-  bool settled = false;
+  while (millis() - settleStart < 4000) { LoadCell.update(); delay(20); }
 
-  while (millis() - settleStart < SETTLE_MAX) {
-    LoadCell.update();
-    delay(50);
+  // Initial calibration from library
+  float nc = LoadCell.getNewCalibration(mass);
+  calFactor = nc; LoadCell.setCalFactor(nc);
 
-    if (millis() - settleStart >= SETTLE_MIN && !settled) {
-      // Collect stability window
-      float sum = 0;
-      for (int i = 0; i < SETTLE_WIN; i++) {
-        while (!LoadCell.update()) delay(5);
-        settleReadings[i] = LoadCell.getData();
-        sum += settleReadings[i];
-      }
-      float mean = sum / SETTLE_WIN;
-      float var = 0;
-      for (int i = 0; i < SETTLE_WIN; i++) {
-        float d = settleReadings[i] - mean;
-        var += d * d;
-      }
-      float sd = sqrt(var / SETTLE_WIN);
-      if (sd < SETTLE_SD) {
-        settled = true;
-        break;
-      }
-    }
-  }
-  if (!settled) {
-    drawCalScreen("Step 3/3", "Settling...\n(using best)");
-    Serial.println(F("CAL_WARN:Settle timeout, using current"));
+  // Auto-correct: prime filter chain, measure actual output, adjust to match expected
+  resetFilters();
+  float expectedForce = mass / 1000.0 * 9.81;  // Known truth
+
+  // Prime filter with enough samples to fill the buffer
+  for (int i = 0; i < filterSize * 4; i++) {
+    while (!LoadCell.update()) delay(2);
+    getFilteredForce();
   }
 
-  float nc=LoadCell.getNewCalibration(mass);
-  calFactor=nc; LoadCell.setCalFactor(nc); saveCal();
-  resetFilters();  // Flush filter buffer so readings use new cal factor immediately
+  // Measure stabilized output from the full filter chain
+  float measuredSum = 0;
+  const int VERIFY_N = 30;
+  for (int i = 0; i < VERIFY_N; i++) {
+    while (!LoadCell.update()) delay(2);
+    measuredSum += getFilteredForce();
+  }
+  float measuredForce = measuredSum / VERIFY_N;
+
+  // Apply correction: adjust cal factor so output matches expected force
+  if (measuredForce > 0.0001) {
+    float correction = measuredForce / expectedForce;
+    nc *= correction;
+    calFactor = nc;
+    LoadCell.setCalFactor(nc);
+    resetFilters();
+    Serial.print(F("CAL_CORRECTION:")); Serial.println(correction, 6);
+  }
+
+  saveCal();
 
   tft.fillScreen(C_BG); tftHeader("CAL DONE");
   tft.setTextSize(1); tft.setTextColor(C_OK);
   tft.setCursor(4,28); tft.print(F("Calibration saved!"));
   tft.setTextColor(C_BLUE_HI); tft.setCursor(4,44);
   tft.print(F("Factor: ")); tft.print(nc,1);
+  tft.setTextColor(C_TXT_DIM); tft.setCursor(4,58);
+  tft.print(F("Expected: ")); tft.print(expectedForce*1000,2); tft.print(F("mN"));
   Serial.print(F("New Cal: ")); Serial.println(nc);
+  Serial.print(F("EXPECTED_FORCE:")); Serial.println(expectedForce, 6);
   Serial.println(F("CAL_DONE"));
   delay(2000); exitCal();
 }

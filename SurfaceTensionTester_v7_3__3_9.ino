@@ -1589,7 +1589,7 @@ void handleDown() {
   long pd=abs(cp-lastSampledPos);
 
   if (pd>=POS_INTERVAL) {
-    float f = -getSignedForce();  // Negate: convention UP = negative
+    float f = getSignedForce();  // Natural sign: UP = negative force
     lastForce=f; lastSampledPos=cp;
     if (streaming) streamData(f, cp);
 

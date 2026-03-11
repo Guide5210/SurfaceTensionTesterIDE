@@ -131,11 +131,22 @@ float calcEmaAlpha(float s) {
 
 float getFilteredForce() {
   // Layer 1: Oversample — average multiple HX711 reads
+  // lcSign() negates for 30g load cell (signal wires A+/A- swapped)
+  float sign = lcSign();
   float rawSum = 0; int vc = 0;
   for (int i = 0; i < oversampleCount; i++) {
-    if (LoadCell.update()) { rawSum += LoadCell.getData(); vc++; }
+    if (LoadCell.update()) { rawSum += sign * LoadCell.getData(); vc++; }
   }
-  float raw = (vc > 0) ? (rawSum / vc) : LoadCell.getData();
+  float raw = (vc > 0) ? (rawSum / vc) : (sign * LoadCell.getData());
+
+  // Prime buffer on first call after reset to avoid cold-start bias.
+  // Without this, the MA buffer is full of zeros which dilutes readings
+  // for the first filterSize calls, and the EMA amplifies the error.
+  if (!emaInit) {
+    for (int i = 0; i < filterSize; i++) readings[i] = raw;
+    total = raw * filterSize;
+    readIdx = 0;
+  }
 
   // Layer 2: Moving Average
   total -= readings[readIdx]; readings[readIdx] = raw; total += readings[readIdx];
@@ -161,7 +172,6 @@ void resetFilters() {
 // BASELINE + SETTLING + CONTACT + PEAK (from v7.1)
 // ═══════════════════════════════════════════════════════
 float baselineForce = 0; bool baselineValid = false;
-//float baselineForce = 0; bool baselineValid = false;
 
 // Signed force: allows negative values (for bidirectional measurement)
 float getSignedForce() {
@@ -246,13 +256,17 @@ const int EEPROM_CAL_30G_ADDR  = 4;   // Cal factor for 30g cell (4 bytes)
 const int EEPROM_LC_ADDR = 8;         // Load cell type stored in EEPROM
 
 const float DEFAULT_CAL_100G = 16800.0;
-const float DEFAULT_CAL_30G  = 50000.0;  // Approximate, calibrate for exact
+const float DEFAULT_CAL_30G  = 696.0;  // 30g cell with inverted signal wires
 
 float calFactor = DEFAULT_CAL_100G;
 
 // Load cell type: 0=100g, 1=30g
 uint8_t loadCellType = 0;
 float loadCellCapacity = 100.0;  // grams
+
+// 30g load cell has A+/A- signal wires swapped → readings are inverted.
+// We keep calFactor positive and negate getData() externally (same as test program).
+float lcSign() { return (loadCellType == 1) ? -1.0 : 1.0; }
 
 void saveCal() {
   int addr = (loadCellType == 1) ? EEPROM_CAL_30G_ADDR : EEPROM_CAL_100G_ADDR;
@@ -262,7 +276,10 @@ void loadCal() {
   int addr = (loadCellType == 1) ? EEPROM_CAL_30G_ADDR : EEPROM_CAL_100G_ADDR;
   byte*p=(byte*)&calFactor;
   for(int i=0;i<4;i++) p[i]=EEPROM.read(addr+i);
-  if(calFactor<1000||calFactor>200000) calFactor = (loadCellType==1) ? DEFAULT_CAL_30G : DEFAULT_CAL_100G;
+  // 30g cell calFactor is ~696 (much lower than 100g's ~16800)
+  float calMin = (loadCellType == 1) ? 100.0 : 1000.0;
+  float calMax = 200000.0;
+  if(calFactor<calMin||calFactor>calMax) calFactor = (loadCellType==1) ? DEFAULT_CAL_30G : DEFAULT_CAL_100G;
 }
 
 void saveLoadCellType() { EEPROM.write(EEPROM_LC_ADDR, loadCellType); }
@@ -2061,6 +2078,9 @@ void handleCalMode() {
   }
 
   float nc=LoadCell.getNewCalibration(mass);
+  // 30g cell: signal wires swapped → calFactor comes out negative.
+  // Negate to keep positive; we negate getData() in getFilteredForce() instead.
+  if (loadCellType == 1) nc = -nc;
   calFactor=nc; LoadCell.setCalFactor(nc); saveCal();
   resetFilters();  // Flush filter buffer so readings use new cal factor immediately
 

@@ -137,6 +137,15 @@ float getFilteredForce() {
   }
   float raw = (vc > 0) ? (rawSum / vc) : LoadCell.getData();
 
+  // Prime buffer on first call after reset to avoid cold-start bias.
+  // Without this, the MA buffer is full of zeros which dilutes readings
+  // for the first filterSize calls, and the EMA amplifies the error.
+  if (!emaInit) {
+    for (int i = 0; i < filterSize; i++) readings[i] = raw;
+    total = raw * filterSize;
+    readIdx = 0;
+  }
+
   // Layer 2: Moving Average
   total -= readings[readIdx]; readings[readIdx] = raw; total += readings[readIdx];
   readIdx = (readIdx + 1) % filterSize;
@@ -161,7 +170,6 @@ void resetFilters() {
 // BASELINE + SETTLING + CONTACT + PEAK (from v7.1)
 // ═══════════════════════════════════════════════════════
 float baselineForce = 0; bool baselineValid = false;
-//float baselineForce = 0; bool baselineValid = false;
 
 // Signed force: allows negative values (for bidirectional measurement)
 float getSignedForce() {

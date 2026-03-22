@@ -276,10 +276,12 @@ void loadCal() {
   int addr = (loadCellType == 1) ? EEPROM_CAL_30G_ADDR : EEPROM_CAL_100G_ADDR;
   byte*p=(byte*)&calFactor;
   for(int i=0;i<4;i++) p[i]=EEPROM.read(addr+i);
-  // 30g cell calFactor is ~696 (much lower than 100g's ~16800)
+  // Guard: uninitialized EEPROM (0xFF×4) = NaN, which bypasses < > checks.
+  // Also reject negative (old firmware's inverted cal), zero, Inf, out-of-range.
   float calMin = (loadCellType == 1) ? 100.0 : 1000.0;
   float calMax = 200000.0;
-  if(calFactor<calMin||calFactor>calMax) calFactor = (loadCellType==1) ? DEFAULT_CAL_30G : DEFAULT_CAL_100G;
+  if(isnan(calFactor)||isinf(calFactor)||calFactor<=0||calFactor<calMin||calFactor>calMax)
+    calFactor = (loadCellType==1) ? DEFAULT_CAL_30G : DEFAULT_CAL_100G;
 }
 
 void saveLoadCellType() { EEPROM.write(EEPROM_LC_ADDR, loadCellType); }
